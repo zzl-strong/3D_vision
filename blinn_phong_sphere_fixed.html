@@ -1,0 +1,195 @@
+
+<style>
+.ctrl { display: flex; align-items: center; gap: 10px; margin: 5px 0; font-size: 13px; color: var(--color-text-secondary); }
+.ctrl label { width: 115px; flex-shrink: 0; }
+.ctrl input[type=range] { flex: 1; }
+.ctrl span { width: 40px; text-align: right; font-size: 13px; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+.section-label { font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin: 12px 0 4px; }
+.row { display: flex; gap: 20px; align-items: flex-start; padding-bottom: 1rem; }
+.panel { flex: 0 0 210px; }
+</style>
+
+<h2 class="sr-only">Blinn-Phong 光照模型 - 三维球体交互演示</h2>
+
+<div class="row">
+  <canvas id="c" width="400" height="400" style="border-radius:var(--border-radius-lg);flex:0 0 400px;background:#0a0a12;"></canvas>
+  <div class="panel">
+    <div class="section-label">光源位置</div>
+    <div class="ctrl"><label>光源 X</label><input type="range" id="lx" min="-300" max="300" value="160" step="1"><span id="lx-v">160</span></div>
+    <div class="ctrl"><label>光源 Y</label><input type="range" id="ly" min="-300" max="300" value="-180" step="1"><span id="ly-v">-180</span></div>
+    <div class="ctrl"><label>光源 Z</label><input type="range" id="lz" min="100" max="600" value="300" step="1"><span id="lz-v">300</span></div>
+
+    <div class="section-label">材质参数</div>
+    <div class="ctrl"><label>环境光 Kₐ</label><input type="range" id="ka" min="0" max="0.3" value="0.04" step="0.01"><span id="ka-v">0.04</span></div>
+    <div class="ctrl"><label>漫反射 Kd</label><input type="range" id="kd" min="0" max="1" value="0.80" step="0.01"><span id="kd-v">0.80</span></div>
+    <div class="ctrl"><label>镜面反射 Ks</label><input type="range" id="ks" min="0" max="1" value="0.65" step="0.01"><span id="ks-v">0.65</span></div>
+    <div class="ctrl"><label>光泽度 α</label><input type="range" id="sh" min="1" max="512" value="96" step="1"><span id="sh-v">96</span></div>
+
+    <div class="section-label">球体颜色</div>
+    <div class="ctrl"><label>R</label><input type="range" id="cr" min="0" max="255" value="55" step="1"><span id="cr-v">55</span></div>
+    <div class="ctrl"><label>G</label><input type="range" id="cg" min="0" max="255" value="110" step="1"><span id="cg-v">110</span></div>
+    <div class="ctrl"><label>B</label><input type="range" id="cb" min="0" max="255" value="210" step="1"><span id="cb-v">210</span></div>
+
+    <div class="section-label">分量查看</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+      <button id="btn-all"      onclick="setMode('all')"      style="font-size:12px;padding:4px 8px;">完整</button>
+      <button id="btn-ambient"  onclick="setMode('ambient')"  style="font-size:12px;padding:4px 8px;">环境光</button>
+      <button id="btn-diffuse"  onclick="setMode('diffuse')"  style="font-size:12px;padding:4px 8px;">漫反射</button>
+      <button id="btn-specular" onclick="setMode('specular')" style="font-size:12px;padding:4px 8px;">镜面</button>
+    </div>
+
+    <div style="margin-top:14px;font-size:12px;color:var(--color-text-secondary);line-height:1.8;">
+      <span style="color:var(--color-text-primary);font-weight:500;">I =</span><br>
+      &nbsp;Kₐ·Iₐ<br>
+      + Kd·(N·L)·Id<br>
+      + Ks·(N·H)^α·Is
+    </div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = 400, H = 400;
+let mode = 'all';
+
+function setMode(m) { mode = m; draw(); }
+function val(id) { return parseFloat(document.getElementById(id).value); }
+function setLbl(id) {
+  const v = val(id);
+  const decimals = ['ka','kd','ks'].includes(id) ? 2 : 0;
+  document.getElementById(id+'-v').textContent = v.toFixed(decimals);
+}
+
+function norm(v) {
+  const l = Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+  return l > 0 ? [v[0]/l, v[1]/l, v[2]/l] : [0,0,1];
+}
+function dot3(a,b) { return Math.max(0, a[0]*b[0]+a[1]*b[1]+a[2]*b[2]); }
+
+function draw() {
+  const ka=val('ka'), kd=val('kd'), ks=val('ks'), sh=val('sh');
+  const lx=val('lx'), ly=val('ly'), lz=val('lz');
+  const CR=val('cr'), CG=val('cg'), CB=val('cb');
+
+  // Dark background
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0, 0, W, H);
+
+  const img = ctx.createImageData(W, H);
+  const d = img.data;
+
+  const cx = W/2, cy = H/2;
+  const R = 165;
+  // Camera along +Z, far away (orthographic-ish)
+  const CAM = [0, 0, 800];
+
+  // Light in world space (sphere centered at origin)
+  const LIGHT = [lx, -ly, lz];
+
+  const matR = CR/255, matG = CG/255, matB = CB/255;
+
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      const dx = px - cx, dy = cy - py; // flip Y so +Y is up
+      const r2 = dx*dx + dy*dy;
+      if (r2 > R*R) continue;
+
+      // Point on sphere surface
+      const dz = Math.sqrt(R*R - r2);
+      const P = [dx, dy, dz];
+
+      // Normal = normalized P (unit sphere centered at origin)
+      const N = norm(P);
+
+      // Light direction (from point to light)
+      const Lv = [LIGHT[0]-P[0], LIGHT[1]-P[1], LIGHT[2]-P[2]];
+      const L = norm(Lv);
+
+      // View direction (from point to camera)
+      const Vv = [CAM[0]-P[0], CAM[1]-P[1], CAM[2]-P[2]];
+      const V = norm(Vv);
+
+      // Half vector (Blinn-Phong)
+      const Hv = [L[0]+V[0], L[1]+V[1], L[2]+V[2]];
+      const Hvn = norm(Hv);
+
+      const NdotL = dot3(N, L);
+      const NdotH = dot3(N, Hvn);
+
+      let r, g, b;
+
+      if (mode === 'ambient') {
+        r = ka * matR;
+        g = ka * matG;
+        b = ka * matB;
+      } else if (mode === 'diffuse') {
+        r = kd * NdotL * matR;
+        g = kd * NdotL * matG;
+        b = kd * NdotL * matB;
+      } else if (mode === 'specular') {
+        const spec = Math.pow(NdotH, sh);
+        r = ks * spec;
+        g = ks * spec;
+        b = ks * spec;
+      } else {
+        const spec = Math.pow(NdotH, sh);
+        r = ka*matR + kd*NdotL*matR + ks*spec;
+        g = ka*matG + kd*NdotL*matG + ks*spec;
+        b = ka*matB + kd*NdotL*matB + ks*spec;
+      }
+
+      // Subtle gamma correction (gamma 2.2 → looks more physical)
+      r = Math.pow(Math.min(r, 1), 1/2.2);
+      g = Math.pow(Math.min(g, 1), 1/2.2);
+      b = Math.pow(Math.min(b, 1), 1/2.2);
+
+      const idx = (py * W + px) * 4;
+      d[idx]   = Math.round(r * 255);
+      d[idx+1] = Math.round(g * 255);
+      d[idx+2] = Math.round(b * 255);
+      d[idx+3] = 255;
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+
+  // Draw light source indicator
+  const lpx = cx + lx * 0.35;
+  const lpy = cy + ly * 0.35;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(lpx, lpy, 8, 0, Math.PI*2);
+  ctx.fillStyle = '#FFE44D';
+  ctx.fill();
+  // Rays
+  ctx.strokeStyle = '#FFE44D';
+  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = 0.7;
+  for (let a = 0; a < 8; a++) {
+    const ang = a * Math.PI / 4;
+    ctx.beginPath();
+    ctx.moveTo(lpx + Math.cos(ang)*11, lpy + Math.sin(ang)*11);
+    ctx.lineTo(lpx + Math.cos(ang)*17, lpy + Math.sin(ang)*17);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Update button styles
+  ['all','ambient','diffuse','specular'].forEach(m => {
+    const btn = document.getElementById('btn-'+m);
+    const active = m === mode;
+    btn.style.background = active ? 'var(--color-background-info)' : '';
+    btn.style.color = active ? 'var(--color-text-info)' : '';
+    btn.style.border = active ? '0.5px solid var(--color-border-info)' : '';
+  });
+}
+
+const ids = ['lx','ly','lz','ka','kd','ks','sh','cr','cg','cb'];
+ids.forEach(id => {
+  document.getElementById(id).addEventListener('input', () => { setLbl(id); draw(); });
+  setLbl(id);
+});
+
+draw();
+</script>
