@@ -1,0 +1,157 @@
+
+<style>
+  canvas { display: block; }
+  .ctrl { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 14px; color: var(--color-text-secondary); }
+  .ctrl input[type=range] { flex: 1; }
+  .val { min-width: 36px; font-weight: 500; color: var(--color-text-primary); font-size: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 0; font-size: 13px; color: var(--color-text-secondary); }
+  .leg-item { display: flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+<h2 class="sr-only">de Casteljau 递推算法交互演示：三次贝塞尔曲线的逐层插值可视化</h2>
+<canvas id="cv" width="660" height="340"></canvas>
+<div style="padding: 0 4px;">
+  <div class="ctrl">
+    <span style="min-width:18px">t</span>
+    <input type="range" id="tSlider" min="0" max="100" value="50" step="1">
+    <span class="val" id="tVal">0.50</span>
+  </div>
+</div>
+<div class="legend">
+  <span class="leg-item"><span class="dot" style="background:#888780"></span>控制多边形 P₀…P₃</span>
+  <span class="leg-item"><span class="dot" style="background:#378ADD"></span>第1层插值 P⁰¹ P¹¹ P²¹</span>
+  <span class="leg-item"><span class="dot" style="background:#1D9E75"></span>第2层插值 P⁰² P¹²</span>
+  <span class="leg-item"><span class="dot" style="background:#D85A30"></span>B(t) 曲线点</span>
+</div>
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const slider = document.getElementById('tSlider');
+const tValEl = document.getElementById('tVal');
+
+const W = 660, H = 340;
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+const textColor = isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)';
+const bgColor = isDark ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0)';
+
+const baseP = [
+  { x: 80,  y: 270 },
+  { x: 200, y: 60  },
+  { x: 460, y: 60  },
+  { x: 580, y: 270 },
+];
+
+function lerp(a, b, t) {
+  return { x: a.x*(1-t)+b.x*t, y: a.y*(1-t)+b.y*t };
+}
+
+function casteljau(pts, t) {
+  const layers = [pts];
+  let cur = pts;
+  while (cur.length > 1) {
+    const next = [];
+    for (let i = 0; i < cur.length-1; i++) next.push(lerp(cur[i], cur[i+1], t));
+    layers.push(next);
+    cur = next;
+  }
+  return layers;
+}
+
+function bezierCurve(pts, steps=200) {
+  const path = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i/steps;
+    let cur = pts;
+    while (cur.length > 1) {
+      const next = [];
+      for (let j = 0; j < cur.length-1; j++) next.push(lerp(cur[j], cur[j+1], t));
+      cur = next;
+    }
+    path.push(cur[0]);
+  }
+  return path;
+}
+
+function drawDot(p, r, color, label) {
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  if (label) {
+    ctx.fillStyle = textColor;
+    ctx.font = '12px var(--font-sans, sans-serif)';
+    ctx.fillText(label, p.x+8, p.y-6);
+  }
+}
+
+function drawLine(a, b, color, dash=[]) {
+  ctx.beginPath();
+  ctx.setLineDash(dash);
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+const layerColors = [
+  '#888780',
+  '#378ADD',
+  '#1D9E75',
+  '#D85A30',
+];
+
+function draw(t) {
+  ctx.clearRect(0, 0, W, H);
+
+  const curve = bezierCurve(baseP);
+  ctx.beginPath();
+  ctx.moveTo(curve[0].x, curve[0].y);
+  for (let i = 1; i < curve.length; i++) ctx.lineTo(curve[i].x, curve[i].y);
+  ctx.strokeStyle = isDark ? 'rgba(211,209,199,0.2)' : 'rgba(100,100,100,0.18)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([]);
+  ctx.stroke();
+
+  const layers = casteljau(baseP, t);
+
+  for (let r = 0; r < layers.length-1; r++) {
+    const pts = layers[r];
+    for (let i = 0; i < pts.length-1; i++) {
+      drawLine(pts[i], pts[i+1], layerColors[r] + (r===0?'99':'cc'), r===0?[6,4]:[]);
+    }
+  }
+
+  const labelsPrefixes = ['P', 'P¹', 'P²'];
+  const labelIdx = ['₀','₁','₂','₃'];
+  for (let r = 0; r < layers.length-1; r++) {
+    const pts = layers[r];
+    pts.forEach((p, i) => {
+      const lbl = r === 0 ? 'P' + labelIdx[i] : (r===1?'P'+labelIdx[i]+'¹' : 'P'+labelIdx[i]+'²');
+      drawDot(p, r===0?5:4, layerColors[r], lbl);
+    });
+  }
+
+  const final = layers[layers.length-1][0];
+  ctx.beginPath();
+  ctx.arc(final.x, final.y, 7, 0, Math.PI*2);
+  ctx.fillStyle = '#D85A30';
+  ctx.fill();
+  ctx.strokeStyle = isDark ? '#fff' : '#fff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#D85A30';
+  ctx.font = '500 13px var(--font-sans, sans-serif)';
+  ctx.fillText('B(' + t.toFixed(2) + ')', final.x+10, final.y-8);
+}
+
+let t = 0.5;
+draw(t);
+
+slider.addEventListener('input', () => {
+  t = slider.value / 100;
+  tValEl.textContent = t.toFixed(2);
+  draw(t);
+});
+</script>
